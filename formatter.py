@@ -9,8 +9,10 @@
 💰 قیمت: ۲۴۵ میلیون تومان
 
 🔧 مشخصات و وضعیت:
-• فنی سالم و آماده سواری
-• مدارک کامل و آماده انتقال
+- فنی سالم و آماده سواری
+- مدارک کامل و آماده انتقال
+
+📢 کانال ما: https://t.me/motoritoo
 
 هیچ API هوش مصنوعی‌ای لازم نیست — همه چیز از خود داده‌های آگهی ساخته میشه.
 بولت‌های «مشخصات و وضعیت» از خطوط توضیحاتِ خود آگهی‌گذار درمیاد.
@@ -19,6 +21,9 @@
 import re
 
 CAPTION_LIMIT = 1024  # محدودیت تلگرام برای کپشن عکس/آلبوم
+
+# لینک کانال — انتهای هر کپشن اضافه میشه
+CHANNEL_LINK = "https://t.me/motoritoo"
 
 FA_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
 EN_TO_FA = str.maketrans("0123456789", FA_DIGITS)
@@ -114,7 +119,11 @@ def build_caption(detail: dict, listing: dict) -> str:
         lines.append("🔧 مشخصات و وضعیت:")
         lines.extend(f"• {b}" for b in bullets)
 
+    footer = f"\n\n📢 کانال ما: {CHANNEL_LINK}"
+
     caption = "\n".join(lines).strip()
-    if len(caption) > CAPTION_LIMIT:
-        caption = caption[: CAPTION_LIMIT - 1].rstrip() + "…"
-    return caption
+    # اول متن اصلی رو (در صورت نیاز) کوتاه می‌کنیم که جا برای لینک کانال بمونه
+    body_limit = CAPTION_LIMIT - len(footer)
+    if len(caption) > body_limit:
+        caption = caption[: body_limit - 1].rstrip() + "…"
+    return caption + footer
