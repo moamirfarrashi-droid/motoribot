@@ -2,11 +2,16 @@ name: Divar to Telegram - Daily
 
 on:
   schedule:
-    - cron: "30 5 * * *"
-  workflow_dispatch: {}
+    # ساعت‌ها به وقت UTC هستن (ایران = UTC+3:30)
+    - cron: "30 6 * * *"    # ۱۰:۰۰ صبح ایران
+    - cron: "30 7 * * *"    # ۱۱:۰۰ ایران
+    - cron: "30 10 * * *"   # ۱۴:۰۰ ایران
+    - cron: "30 13 * * *"   # ۱۷:۰۰ ایران
+    - cron: "30 15 * * *"   # ۱۹:۰۰ ایران
+  workflow_dispatch: {}   # اجرای دستی از تب Actions
 
 permissions:
-  contents: write
+  contents: write   # برای کامیت کردن seen_posts.json
 
 jobs:
   post:
@@ -30,12 +35,13 @@ jobs:
           DIVAR_CATEGORY: "motorcycles"
           POST_MODE: "album"
           MAX_IMAGES_PER_POST: "6"
-          MAX_POSTS_PER_RUN: "10"
-          DELAY_BETWEEN_POSTS_SECONDS: "30"
+          MAX_POSTS_PER_RUN: "6"
+          DELAY_BETWEEN_POSTS_SECONDS: "45"
         run: python main.py
 
       - name: Save seen posts (prevent duplicates on next run)
         run: |
+          git pull --rebase || true
           git config user.name "bot"
           git config user.email "bot@users.noreply.github.com"
           git add seen_posts.json || true
