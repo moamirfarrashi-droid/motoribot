@@ -4,11 +4,26 @@
 ⚠️ توجه: این ماژول از اندپوینت‌های داخلی و مستندنشده‌ی دیوار استفاده می‌کنه
 (همون‌هایی که خود سایت/اپ دیوار صدا می‌زنه). ممکنه بدون اطلاع تغییر کنن.
 جزئیات و توصیه‌ها در README.md.
+
+نکته: نسخه‌ی قبلی این فایل از اندپوینت قدیمی‌تر api.divar.ir/v8/search استفاده
+می‌کرد که الان توسط دیوار بلاک شده (پیام "نیاز به بروزرسانی"). این نسخه از
+همون اندپوینتی استفاده می‌کنه که خود سایت divar.ir موقع نمایش نتایج جستجو
+صدا می‌زنه (v8/web-search) و به هدر یا نسخه‌ی خاصی نیاز نداره.
 """
 
 import requests
 
-SEARCH_URL = "https://api.divar.ir/v8/search/{city_code}/{category}"
+CITY_SLUGS = {
+    0: "iran",
+    1: "tehran",
+    2: "karaj",
+    3: "mashhad",
+    4: "isfahan",
+    5: "tabriz",
+    6: "shiraz",
+}
+
+WEB_SEARCH_URL = "https://api.divar.ir/v8/web-search/{city_slug}/{category}"
 POST_V5_URL = "https://api.divar.ir/v5/posts/{token}"
 POST_V8_URL = "https://api.divar.ir/v8/posts-v2/web/{token}"
 POST_WEB_URL = "https://divar.ir/v/{token}"
@@ -16,20 +31,72 @@ POST_WEB_URL = "https://divar.ir/v/{token}"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-    "Content-Type": "application/json",
+    "Accept": "application/json",
 }
+
+
+# ---------------------------------------------------------------- ابزار عمومی
+
+def _walk(obj):
+    """پیمایش بازگشتی کل JSON (برای پیدا کردن فیلدها در هر ساختاری)."""
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from _walk(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _walk(v)
+
+
+def _find_first_str(d: dict, *keys: str) -> str:
+    for k in keys:
+        v = d.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def _extract_images(data) -> list[str]:
+    """همه‌ی URLهای عکس رو از هر جای JSON پیدا می‌کنه."""
+    urls, seen = [], set()
+    for node in _walk(data):
+        for key in ("image", "image_url", "url", "src"):
+            val = node.get(key)
+            if (
+                isinstance(val, str)
+                and "divarcdn" in val
+                and ("post" in val or "picture" in val or val.endswith((".jpg", ".jpeg", ".webp", ".png")))
+                and "thumbnail" not in val
+                and val not in seen
+            ):
+                seen.add(val)
+                urls.append(val)
+    return urls
+
+
+def _find_token(ad: dict) -> str:
+    if isinstance(ad.get("token"), str):
+        return ad["token"]
+    for node in _walk(ad):
+        t = node.get("token")
+        if isinstance(t, str) and t:
+            return t
+        link = node.get("web_info", {}).get("web_url") if isinstance(node.get("web_info"), dict) else None
+        if isinstance(link, str) and "/v/" in link:
+            return link.rstrip("/").split("/")[-1]
+    return ""
 
 
 # ---------------------------------------------------------------- لیست آگهی‌ها
 
-def fetch_listing_page(city_code: int, category: str, last_post_date: int = 0) -> dict:
-    url = SEARCH_URL.format(city_code=city_code, category=category)
-    payload = {
-        "json_schema": {"category": {"value": category}},
-        "last-post-date": last_post_date,
-    }
-    resp = requests.post(url, json=payload, headers=HEADERS, timeout=20)
+def fetch_listing_page(city_code: int, category: str) -> list[dict]:
+    city_slug = CITY_SLUGS.get(city_code, "tehran")
+    url = WEB_SEARCH_URL.format(city_slug=city_slug, category=category)
+    params = {"cities": city_code if city_code else ""}
 
+    resp = requests.get(url, params=params, headers=HEADERS, timeout=20)
+
+    print(f"[debug] GET {resp.url}")
     print(f"[debug] HTTP status: {resp.status_code}")
     print(f"[debug] response length: {len(resp.content)} bytes")
 
@@ -43,76 +110,40 @@ def fetch_listing_page(city_code: int, category: str, last_post_date: int = 0) -
         print(f"[debug] پاسخ JSON نبود — اولین ۵۰۰ کاراکتر بدنه:\n{resp.text[:500]}")
         raise
 
-    if "widget_list" not in data:
-        print(f"[debug] کلید widget_list توی جواب نبود. کلیدهای موجود: {list(data.keys())}")
+    post_list = data.get("web_widgets", {}).get("post_list")
+    if post_list is None:
+        print(f"[debug] کلید web_widgets.post_list توی جواب نبود. کلیدهای موجود: {list(data.keys())}")
         print(f"[debug] نمونه از خود جواب (۸۰۰ کاراکتر اول):\n{str(data)[:800]}")
+        return []
 
     posts = []
-    for widget in data.get("widget_list", []):
-        d = widget.get("data", {})
-        token = d.get("token")
+    for widget in post_list:
+        if widget.get("widget_type") != "POST_ROW":
+            continue
+        ad = widget.get("data", {})
+        token = _find_token(ad)
         if not token:
             continue
         posts.append({
             "token": token,
-            "title": (d.get("title") or "").strip(),
-            "thumb": d.get("image", ""),
-            "city": d.get("city", ""),
-            "district": d.get("district", ""),
-            "normal_text": d.get("normal_text", ""),
+            "title": _find_first_str(ad, "title"),
+            "thumb": _find_first_str(ad, "image_url", "image") or (_extract_images(ad) or [""])[0],
+            "city": "",
+            "district": "",
+            "normal_text": _find_first_str(ad, "middle_description_text", "top_description_text", "bottom_description_text"),
             "web_url": POST_WEB_URL.format(token=token),
         })
 
-    if data.get("widget_list") and not posts:
-        print(f"[debug] {len(data['widget_list'])} ویجت اومد ولی هیچ‌کدوم token نداشتن.")
-        print(f"[debug] نمونه‌ی اولین ویجت:\n{str(data['widget_list'][0])[:800]}")
+    if post_list and not posts:
+        print(f"[debug] {len(post_list)} ویجت اومد ولی هیچ‌کدوم POST_ROW/token نداشتن.")
+        print(f"[debug] نمونه‌ی اولین ویجت:\n{str(post_list[0])[:800]}")
 
-    return {"last_post_date": data.get("last_post_date", 0), "posts": posts}
-
-
-def fetch_new_listings(city_code: int, category: str, max_pages: int = 2) -> list[dict]:
-    """چند صفحه از نتایج رو می‌خونه (جدیدترین‌ها اول)."""
-    all_posts, last_post_date = [], 0
-    for _ in range(max_pages):
-        page = fetch_listing_page(city_code, category, last_post_date)
-        if not page["posts"]:
-            break
-        all_posts.extend(page["posts"])
-        if page["last_post_date"] in (0, -1, last_post_date):
-            break
-        last_post_date = page["last_post_date"]
-    return all_posts
+    return posts
 
 
-# ------------------------------------------------------------- جزئیات آگهی
-
-def _walk(obj):
-    """پیمایش بازگشتی کل JSON (برای پیدا کردن فیلدها در هر ساختاری)."""
-    if isinstance(obj, dict):
-        yield obj
-        for v in obj.values():
-            yield from _walk(v)
-    elif isinstance(obj, list):
-        for v in obj:
-            yield from _walk(v)
-
-
-def _extract_images(data: dict) -> list[str]:
-    """همه‌ی URLهای عکس آگهی رو از هر جای JSON پیدا می‌کنه."""
-    urls, seen = [], set()
-    for node in _walk(data):
-        for key in ("image", "url", "src"):
-            val = node.get(key)
-            if (
-                isinstance(val, str)
-                and "divarcdn" in val
-                and ("post" in val or "picture" in val or val.endswith((".jpg", ".jpeg", ".webp", ".png")))
-                and "thumbnail" not in val
-                and val not in seen
-            ):
-                seen.add(val)
-                urls.append(val)
-    return urls
+def fetch_new_listings(city_code: int, category: str, max_pages: int = 1) -> list[dict]:
+    """فعلاً فقط صفحه‌ی اول (معمولاً ۲۰-۲۴ آگهی جدیدترین) — برای این حجم کار کافیه."""
+    return fetch_listing_page(city_code, category)
 
 
 def _extract_spec_pairs(data: dict) -> dict:
