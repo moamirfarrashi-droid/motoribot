@@ -1,12 +1,15 @@
 """
-کلاینت دیوار — لیست آگهی‌های تازه + جزئیات کامل هر آگهی (همه عکس‌ها و مشخصات).
+کلاینت دیوار — لیست آگهی‌ها (با صفحه‌بندی، چندین صفحه عمیق) + جزئیات کامل هر آگهی.
 
 ⚠️ این ماژول از اندپوینت‌های داخلی و مستندنشده‌ی دیوار استفاده می‌کنه.
-تاریخچه:
-  - v8/search (POST قدیمی)      → بازنشسته شده، پیام «نیاز به بروزرسانی» میده
-  - v8/web-search (GET)          → همین‌طور
-  - v8/postlist/w/search (POST)  → اندپوینت فعلی که خود سایت divar.ir استفاده می‌کنه ← این نسخه
+اندپوینت فعلی: POST api.divar.ir/v8/postlist/w/search (همونی که خود سایت استفاده می‌کنه)
+
+نکته: چون فیلترهای کانال سخت‌گیرانه‌ست (کارکرد + قیمت)، این نسخه به‌جای فقط
+صفحه‌ی اول، چندین صفحه از نتایج رو ورق می‌زنه (قدیمی‌ترها هم بررسی میشن) تا
+آگهی واجد شرایط بیشتری پیدا بشه.
 """
+
+import time
 
 import requests
 
@@ -14,6 +17,11 @@ POSTLIST_URL = "https://api.divar.ir/v8/postlist/w/search"
 POST_V5_URL = "https://api.divar.ir/v5/posts/{token}"
 POST_V8_URL = "https://api.divar.ir/v8/posts-v2/web/{token}"
 POST_WEB_URL = "https://divar.ir/v/{token}"
+
+# چند صفحه از نتایج دیوار در هر اجرا بررسی بشه (هر صفحه ≈ ۲۴ آگهی)
+MAX_PAGES = 10
+# مکث بین درخواست هر صفحه (ثانیه) — برای فشار نیاوردن به دیوار
+PAGE_DELAY_SECONDS = 2
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -77,42 +85,25 @@ def _find_token(ad: dict) -> str:
     return ""
 
 
+def _find_pagination(data: dict):
+    """داده‌ی صفحه‌بندی برای درخواست صفحه‌ی بعد رو پیدا می‌کنه (اگه باشه)."""
+    pag = data.get("pagination")
+    if isinstance(pag, dict):
+        pd = pag.get("data")
+        if isinstance(pd, dict) and pd:
+            return pd
+    # جستجوی عمومی: هر dict که last_post_date داشته باشه و @type صفحه‌بندی
+    for node in _walk(data):
+        if isinstance(node, dict) and "last_post_date" in node and "@type" in str(node.get("@type", "")):
+            if "Pagination" in str(node.get("@type", "")):
+                return node
+    return None
+
+
 # ---------------------------------------------------------------- لیست آگهی‌ها
 
-def fetch_listing_page(city_code: int, category: str) -> list[dict]:
-    payload = {
-        "city_ids": [str(city_code)] if city_code else [],
-        "source_view": "CATEGORY",
-        "disable_recommendation": False,
-        "search_data": {
-            "form_data": {
-                "data": {
-                    "category": {"str": {"value": category}},
-                    "sort": {"str": {"value": "sort_date"}},
-                }
-            },
-        },
-    }
-
-    resp = requests.post(POSTLIST_URL, json=payload, headers=HEADERS, timeout=20)
-
-    print(f"[debug] POST {POSTLIST_URL}")
-    print(f"[debug] HTTP status: {resp.status_code}")
-    print(f"[debug] response length: {len(resp.content)} bytes")
-
-    if resp.status_code != 200:
-        print(f"[debug] پاسخ غیرمنتظره — اولین ۵۰۰ کاراکتر بدنه:\n{resp.text[:500]}")
-        resp.raise_for_status()
-
-    try:
-        data = resp.json()
-    except ValueError:
-        print(f"[debug] پاسخ JSON نبود — اولین ۵۰۰ کاراکتر بدنه:\n{resp.text[:500]}")
-        raise
-
-    # آگهی‌ها معمولاً توی list_widgets با widget_type == POST_ROW هستن؛
-    # ولی برای اطمینان کل JSON رو می‌گردیم.
-    posts, seen_tokens = [], set()
+def _parse_posts(data: dict, seen_tokens: set) -> list[dict]:
+    posts = []
     for node in _walk(data):
         if node.get("widget_type") != "POST_ROW":
             continue
@@ -130,18 +121,66 @@ def fetch_listing_page(city_code: int, category: str) -> list[dict]:
             "normal_text": _find_first_str(ad, "middle_description_text", "top_description_text", "bottom_description_text", "red_text"),
             "web_url": POST_WEB_URL.format(token=token),
         })
-
-    if not posts:
-        print(f"[debug] هیچ POST_ROW با token پیدا نشد. کلیدهای سطح اول جواب: {list(data.keys())}")
-        print(f"[debug] نمونه از خود جواب (۱۰۰۰ کاراکتر اول):\n{str(data)[:1000]}")
-
     return posts
 
 
-def fetch_new_listings(city_code: int, category: str, max_pages: int = 1) -> list[dict]:
-    """صفحه‌ی اول نتایج (معمولاً ۲۰-۲۴ آگهی جدیدترین) — برای این حجم کار کافیه."""
-    return fetch_listing_page(city_code, category)
+def fetch_new_listings(city_code: int, category: str, max_pages: int = MAX_PAGES) -> list[dict]:
+    """چندین صفحه از نتایج رو ورق می‌زنه و همه‌ی آگهی‌ها رو یکجا برمی‌گردونه."""
+    all_posts: list[dict] = []
+    seen_tokens: set = set()
+    pagination_data = None
 
+    for page_num in range(1, max_pages + 1):
+        payload = {
+            "city_ids": [str(city_code)] if city_code else [],
+            "source_view": "CATEGORY",
+            "disable_recommendation": True,
+            "search_data": {
+                "form_data": {
+                    "data": {
+                        "category": {"str": {"value": category}},
+                        "sort": {"str": {"value": "sort_date"}},
+                    }
+                },
+            },
+        }
+        if pagination_data:
+            payload["pagination_data"] = pagination_data
+
+        try:
+            resp = requests.post(POSTLIST_URL, json=payload, headers=HEADERS, timeout=20)
+        except requests.RequestException as e:
+            print(f"[divar] صفحه {page_num}: خطای شبکه: {e}")
+            break
+
+        if resp.status_code != 200:
+            print(f"[divar] صفحه {page_num}: HTTP {resp.status_code} — {resp.text[:300]}")
+            break
+
+        try:
+            data = resp.json()
+        except ValueError:
+            print(f"[divar] صفحه {page_num}: پاسخ JSON نبود — {resp.text[:300]}")
+            break
+
+        page_posts = _parse_posts(data, seen_tokens)
+        all_posts.extend(page_posts)
+        print(f"[divar] صفحه {page_num}: {len(page_posts)} آگهی (مجموع: {len(all_posts)})")
+
+        if page_num == 1 and not page_posts:
+            print(f"[debug] هیچ POST_ROW پیدا نشد. کلیدهای سطح اول: {list(data.keys())}")
+            print(f"[debug] نمونه از جواب:\n{str(data)[:800]}")
+
+        pagination_data = _find_pagination(data)
+        if not pagination_data or not page_posts:
+            break  # صفحه‌ی بعدی وجود نداره
+
+        time.sleep(PAGE_DELAY_SECONDS)
+
+    return all_posts
+
+
+# ------------------------------------------------------------- جزئیات آگهی
 
 def _extract_spec_pairs(data: dict) -> dict:
     """جفت‌های عنوان/مقدار (مثل کارکرد، مدل، برند) رو از ویجت‌های آگهی درمیاره."""
