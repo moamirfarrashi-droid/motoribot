@@ -2,7 +2,7 @@
 اسکریپت اصلی. هر بار اجرا:
   ۱. لیست آگهی‌های تازه موتورسیکلت رو از دیوار می‌گیره
   ۲. تکراری‌ها رو (با seen_posts.json) فیلتر می‌کنه
-  ۳. جزئیات هر آگهی رو می‌گیره و فقط موتورهایی با کارکرد ۲۰۰+ کیلومتر رو نگه می‌داره
+  ۳. جزئیات هر آگهی رو می‌گیره و فقط موتورهای مطابق فیلترها رو نگه می‌داره
   ۴. کپشن با قالب کانال می‌سازه و پست می‌کنه (آلبوم عکس + دکمه‌ها)
 """
 
@@ -20,25 +20,40 @@ from telegram_poster import TelegramPoster
 
 load_dotenv()
 
-# حداقل کارکرد (کیلومتر) — آگهی‌هایی با کارکرد کمتر از این (یا نامشخص) پست نمیشن
-MIN_MILEAGE_KM = 200
+# ---- فیلترهای آگهی ----
+# فقط موتورهایی با کارکرد بین این دو عدد (کیلومتر) پست میشن
+MIN_MILEAGE_KM = 1000
+MAX_MILEAGE_KM = 15000
+# فقط موتورهایی با قیمت حداقل این مقدار (تومان) پست میشن
+MIN_PRICE_TOMAN = 400_000_000
 
 FA_TO_EN = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
 
 
+def _digits_of(text: str) -> int | None:
+    digits = re.sub(r"[^0-9]", "", str(text).translate(FA_TO_EN))
+    return int(digits) if digits else None
+
+
 def get_mileage_km(detail: dict) -> int | None:
     """کارکرد آگهی رو به عدد (کیلومتر) برمی‌گردونه؛ اگه پیدا نشد None."""
-    raw = ""
     for key, value in detail.get("specs", {}).items():
         if "کارکرد" in key:
-            raw = value
-            break
+            return _digits_of(value)
+    return None
+
+
+def get_price_toman(detail: dict) -> int | None:
+    """قیمت آگهی رو به عدد (تومان) برمی‌گردونه؛ اگه پیدا نشد یا توافقی بود None."""
+    raw = detail.get("price_text", "")
     if not raw:
+        for key, value in detail.get("specs", {}).items():
+            if "قیمت" in key:
+                raw = value
+                break
+    if not raw or "توافق" in raw:
         return None
-    digits = re.sub(r"[^0-9]", "", raw.translate(FA_TO_EN))
-    if not digits:
-        return None
-    return int(digits)
+    return _digits_of(raw)
 
 
 def get_config(need_telegram: bool = True):
@@ -69,6 +84,7 @@ def run_test_token(token: str):
     print("عنوان:", detail["title"])
     print("مکان:", detail["city"], "-", detail["district"])
     print("کارکرد (کیلومتر):", get_mileage_km(detail))
+    print("قیمت (تومان):", get_price_toman(detail))
     print("تعداد عکس:", len(detail["images"]))
     for img in detail["images"]:
         print("  🖼", img)
@@ -87,7 +103,7 @@ def run_test():
         detail = fetch_post_detail(listing["token"])
         print("=" * 50)
         print(f"لینک: {listing['web_url']}")
-        print(f"کارکرد: {get_mileage_km(detail)} کیلومتر | عکس: {len(detail['images'])}")
+        print(f"کارکرد: {get_mileage_km(detail)} | قیمت: {get_price_toman(detail)} | عکس: {len(detail['images'])}")
         print("-" * 50)
         print(build_caption(detail, listing))
         print()
@@ -120,10 +136,18 @@ def main():
         try:
             detail = fetch_post_detail(listing["token"])
 
-            # --- فیلتر کارکرد: فقط ۲۰۰ کیلومتر به بالا ---
+            # --- فیلتر کارکرد: بین ۱۰۰۰ تا ۱۵۰۰۰ کیلومتر ---
             mileage = get_mileage_km(detail)
-            if mileage is None or mileage < MIN_MILEAGE_KM:
+            if mileage is None or not (MIN_MILEAGE_KM <= mileage <= MAX_MILEAGE_KM):
                 print(f"[main] ⏭ رد شد (کارکرد={mileage}): {listing['title']}")
+                mark_seen(seen, listing["token"])
+                save_seen(seen)
+                continue
+
+            # --- فیلتر قیمت: حداقل ۴۰۰ میلیون تومان (توافقی/نامشخص هم رد میشه) ---
+            price = get_price_toman(detail)
+            if price is None or price < MIN_PRICE_TOMAN:
+                print(f"[main] ⏭ رد شد (قیمت={price}): {listing['title']}")
                 mark_seen(seen, listing["token"])
                 save_seen(seen)
                 continue
@@ -148,10 +172,6 @@ def main():
 
 
 if __name__ == "__main__":
-    if "--test" in sys.argv:
-        run_test()
-    elif "--test-token" in sys.argv:
-        idx = sys.argv.index("--test-token")
-        run_test_token(sys.argv[idx + 1])
-    else:
-        main()
+    main() if "--test" not in sys.argv and "--test-token" not in sys.argv else (
+        run_test() if "--test" in sys.argv else run_test_token(sys.argv[sys.argv.index("--test-token") + 1])
+    )
