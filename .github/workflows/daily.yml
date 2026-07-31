@@ -1,0 +1,43 @@
+name: Divar to Telegram - Daily
+
+on:
+  schedule:
+    - cron: "30 5 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          SUPPORT_TELEGRAM_URL: ${{ secrets.SUPPORT_TELEGRAM_URL }}
+          DIVAR_CITY_CODE: "1"
+          DIVAR_CATEGORY: "motorcycles"
+          POST_MODE: "album"
+          MAX_IMAGES_PER_POST: "6"
+          MAX_POSTS_PER_RUN: "10"
+          DELAY_BETWEEN_POSTS_SECONDS: "30"
+        run: python main.py
+
+      - name: Save seen posts (prevent duplicates on next run)
+        run: |
+          git config user.name "bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add seen_posts.json || true
+          git diff --cached --quiet || git commit -m "update seen posts [skip ci]"
+          git push
