@@ -211,6 +211,18 @@ def fetch_post_detail(token: str) -> dict:
     if not result["images"]:
         result["images"] = _extract_images(data)
 
+    # مکان: کلیدهای city_persian / district_persian هر جای JSON که باشن
+    if not result["city"] or not result["district"]:
+        for node in _walk(data):
+            c = node.get("city_persian")
+            d = node.get("district_persian")
+            if isinstance(c, str) and c and not result["city"]:
+                result["city"] = c.strip()
+            if isinstance(d, str) and d and not result["district"]:
+                result["district"] = d.strip()
+            if result["city"] and result["district"]:
+                break
+
     specs = _extract_spec_pairs(data)
     result["specs"] = specs
 
