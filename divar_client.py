@@ -29,8 +29,23 @@ def fetch_listing_page(city_code: int, category: str, last_post_date: int = 0) -
         "last-post-date": last_post_date,
     }
     resp = requests.post(url, json=payload, headers=HEADERS, timeout=20)
-    resp.raise_for_status()
-    data = resp.json()
+
+    print(f"[debug] HTTP status: {resp.status_code}")
+    print(f"[debug] response length: {len(resp.content)} bytes")
+
+    if resp.status_code != 200:
+        print(f"[debug] پاسخ غیرمنتظره — اولین ۵۰۰ کاراکتر بدنه:\n{resp.text[:500]}")
+        resp.raise_for_status()
+
+    try:
+        data = resp.json()
+    except ValueError:
+        print(f"[debug] پاسخ JSON نبود — اولین ۵۰۰ کاراکتر بدنه:\n{resp.text[:500]}")
+        raise
+
+    if "widget_list" not in data:
+        print(f"[debug] کلید widget_list توی جواب نبود. کلیدهای موجود: {list(data.keys())}")
+        print(f"[debug] نمونه از خود جواب (۸۰۰ کاراکتر اول):\n{str(data)[:800]}")
 
     posts = []
     for widget in data.get("widget_list", []):
@@ -47,6 +62,10 @@ def fetch_listing_page(city_code: int, category: str, last_post_date: int = 0) -
             "normal_text": d.get("normal_text", ""),
             "web_url": POST_WEB_URL.format(token=token),
         })
+
+    if data.get("widget_list") and not posts:
+        print(f"[debug] {len(data['widget_list'])} ویجت اومد ولی هیچ‌کدوم token نداشتن.")
+        print(f"[debug] نمونه‌ی اولین ویجت:\n{str(data['widget_list'][0])[:800]}")
 
     return {"last_post_date": data.get("last_post_date", 0), "posts": posts}
 
@@ -104,7 +123,6 @@ def _extract_spec_pairs(data: dict) -> dict:
         value = node.get("value")
         if isinstance(title, str) and isinstance(value, str) and title and value:
             specs.setdefault(title.strip(), value.strip())
-        # فرمت دیگری که دیوار استفاده می‌کند: items با label/value
         items = node.get("items")
         if isinstance(items, list):
             for it in items:
@@ -116,17 +134,13 @@ def _extract_spec_pairs(data: dict) -> dict:
 
 
 def fetch_post_detail(token: str) -> dict:
-    """جزئیات کامل یک آگهی: عنوان، توضیحات، همه عکس‌ها، مشخصات (سال/کارکرد/...)، قیمت.
-
-    اول اندپوینت جدیدتر v8 رو امتحان می‌کنه، اگه نشد میره سراغ v5.
-    خروجی همیشه dict با کلیدهای ثابته؛ فیلدی که پیدا نشه خالی می‌مونه.
-    """
+    """جزئیات کامل یک آگهی: عنوان، توضیحات، همه عکس‌ها، مشخصات (سال/کارکرد/...)، قیمت."""
     result = {
         "token": token,
         "title": "",
         "description": "",
         "images": [],
-        "specs": {},        # مثل {"کارکرد": "۱۰,۰۰۰", "مدل (سال تولید)": "۱۴۰۳", ...}
+        "specs": {},
         "price_text": "",
         "city": "",
         "district": "",
@@ -145,7 +159,6 @@ def fetch_post_detail(token: str) -> dict:
     if data is None:
         return result
 
-    # --- فیلدهای مسیر v5 (اگه موجود باشن) ---
     try:
         result["title"] = data["data"]["share"]["title"]
     except (KeyError, TypeError):
@@ -166,14 +179,12 @@ def fetch_post_detail(token: str) -> dict:
     except (KeyError, TypeError):
         pass
 
-    # --- استخراج عمومی (برای v8 یا هر ساختار دیگه) ---
     if not result["images"]:
         result["images"] = _extract_images(data)
 
     specs = _extract_spec_pairs(data)
     result["specs"] = specs
 
-    # عنوان/توضیحات از ویجت‌ها اگه از مسیر v5 پیدا نشد
     if not result["title"]:
         for node in _walk(data):
             if node.get("widget_type") == "POST_TITLE" or "post_title" in str(node.get("widget_type", "")).lower():
@@ -190,7 +201,6 @@ def fetch_post_detail(token: str) -> dict:
                     result["description"] = d.strip()
                     break
 
-    # قیمت: از specs یا هر جای دیگه
     for key in ("قیمت", "قیمت پایه", "قیمت کل"):
         if key in specs:
             result["price_text"] = specs[key]
