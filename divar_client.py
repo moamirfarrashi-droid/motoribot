@@ -1,29 +1,16 @@
 """
 کلاینت دیوار — لیست آگهی‌های تازه + جزئیات کامل هر آگهی (همه عکس‌ها و مشخصات).
 
-⚠️ توجه: این ماژول از اندپوینت‌های داخلی و مستندنشده‌ی دیوار استفاده می‌کنه
-(همون‌هایی که خود سایت/اپ دیوار صدا می‌زنه). ممکنه بدون اطلاع تغییر کنن.
-جزئیات و توصیه‌ها در README.md.
-
-نکته: نسخه‌ی قبلی این فایل از اندپوینت قدیمی‌تر api.divar.ir/v8/search استفاده
-می‌کرد که الان توسط دیوار بلاک شده (پیام "نیاز به بروزرسانی"). این نسخه از
-همون اندپوینتی استفاده می‌کنه که خود سایت divar.ir موقع نمایش نتایج جستجو
-صدا می‌زنه (v8/web-search) و به هدر یا نسخه‌ی خاصی نیاز نداره.
+⚠️ این ماژول از اندپوینت‌های داخلی و مستندنشده‌ی دیوار استفاده می‌کنه.
+تاریخچه:
+  - v8/search (POST قدیمی)      → بازنشسته شده، پیام «نیاز به بروزرسانی» میده
+  - v8/web-search (GET)          → همین‌طور
+  - v8/postlist/w/search (POST)  → اندپوینت فعلی که خود سایت divar.ir استفاده می‌کنه ← این نسخه
 """
 
 import requests
 
-CITY_SLUGS = {
-    0: "iran",
-    1: "tehran",
-    2: "karaj",
-    3: "mashhad",
-    4: "isfahan",
-    5: "tabriz",
-    6: "shiraz",
-}
-
-WEB_SEARCH_URL = "https://api.divar.ir/v8/web-search/{city_slug}/{category}"
+POSTLIST_URL = "https://api.divar.ir/v8/postlist/w/search"
 POST_V5_URL = "https://api.divar.ir/v5/posts/{token}"
 POST_V8_URL = "https://api.divar.ir/v8/posts-v2/web/{token}"
 POST_WEB_URL = "https://divar.ir/v/{token}"
@@ -32,6 +19,9 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
     "Accept": "application/json",
+    "Content-Type": "application/json",
+    "Origin": "https://divar.ir",
+    "Referer": "https://divar.ir/",
 }
 
 
@@ -90,13 +80,23 @@ def _find_token(ad: dict) -> str:
 # ---------------------------------------------------------------- لیست آگهی‌ها
 
 def fetch_listing_page(city_code: int, category: str) -> list[dict]:
-    city_slug = CITY_SLUGS.get(city_code, "tehran")
-    url = WEB_SEARCH_URL.format(city_slug=city_slug, category=category)
-    params = {"cities": city_code if city_code else ""}
+    payload = {
+        "city_ids": [str(city_code)] if city_code else [],
+        "source_view": "CATEGORY",
+        "disable_recommendation": False,
+        "search_data": {
+            "form_data": {
+                "data": {
+                    "category": {"str": {"value": category}},
+                    "sort": {"str": {"value": "sort_date"}},
+                }
+            },
+        },
+    }
 
-    resp = requests.get(url, params=params, headers=HEADERS, timeout=20)
+    resp = requests.post(POSTLIST_URL, json=payload, headers=HEADERS, timeout=20)
 
-    print(f"[debug] GET {resp.url}")
+    print(f"[debug] POST {POSTLIST_URL}")
     print(f"[debug] HTTP status: {resp.status_code}")
     print(f"[debug] response length: {len(resp.content)} bytes")
 
@@ -110,39 +110,36 @@ def fetch_listing_page(city_code: int, category: str) -> list[dict]:
         print(f"[debug] پاسخ JSON نبود — اولین ۵۰۰ کاراکتر بدنه:\n{resp.text[:500]}")
         raise
 
-    post_list = data.get("web_widgets", {}).get("post_list")
-    if post_list is None:
-        print(f"[debug] کلید web_widgets.post_list توی جواب نبود. کلیدهای موجود: {list(data.keys())}")
-        print(f"[debug] نمونه از خود جواب (۸۰۰ کاراکتر اول):\n{str(data)[:800]}")
-        return []
-
-    posts = []
-    for widget in post_list:
-        if widget.get("widget_type") != "POST_ROW":
+    # آگهی‌ها معمولاً توی list_widgets با widget_type == POST_ROW هستن؛
+    # ولی برای اطمینان کل JSON رو می‌گردیم.
+    posts, seen_tokens = [], set()
+    for node in _walk(data):
+        if node.get("widget_type") != "POST_ROW":
             continue
-        ad = widget.get("data", {})
+        ad = node.get("data", {})
         token = _find_token(ad)
-        if not token:
+        if not token or token in seen_tokens:
             continue
+        seen_tokens.add(token)
         posts.append({
             "token": token,
             "title": _find_first_str(ad, "title"),
             "thumb": _find_first_str(ad, "image_url", "image") or (_extract_images(ad) or [""])[0],
             "city": "",
             "district": "",
-            "normal_text": _find_first_str(ad, "middle_description_text", "top_description_text", "bottom_description_text"),
+            "normal_text": _find_first_str(ad, "middle_description_text", "top_description_text", "bottom_description_text", "red_text"),
             "web_url": POST_WEB_URL.format(token=token),
         })
 
-    if post_list and not posts:
-        print(f"[debug] {len(post_list)} ویجت اومد ولی هیچ‌کدوم POST_ROW/token نداشتن.")
-        print(f"[debug] نمونه‌ی اولین ویجت:\n{str(post_list[0])[:800]}")
+    if not posts:
+        print(f"[debug] هیچ POST_ROW با token پیدا نشد. کلیدهای سطح اول جواب: {list(data.keys())}")
+        print(f"[debug] نمونه از خود جواب (۱۰۰۰ کاراکتر اول):\n{str(data)[:1000]}")
 
     return posts
 
 
 def fetch_new_listings(city_code: int, category: str, max_pages: int = 1) -> list[dict]:
-    """فعلاً فقط صفحه‌ی اول (معمولاً ۲۰-۲۴ آگهی جدیدترین) — برای این حجم کار کافیه."""
+    """صفحه‌ی اول نتایج (معمولاً ۲۰-۲۴ آگهی جدیدترین) — برای این حجم کار کافیه."""
     return fetch_listing_page(city_code, category)
 
 
@@ -188,6 +185,7 @@ def fetch_post_detail(token: str) -> dict:
         except (requests.RequestException, ValueError):
             continue
     if data is None:
+        print(f"[debug] جزئیات آگهی {token} از هیچ‌کدوم از اندپوینت‌ها نیومد.")
         return result
 
     try:
