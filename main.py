@@ -2,16 +2,12 @@
 اسکریپت اصلی. هر بار اجرا:
   ۱. لیست آگهی‌های تازه موتورسیکلت رو از دیوار می‌گیره
   ۲. تکراری‌ها رو (با seen_posts.json) فیلتر می‌کنه
-  ۳. برای هر آگهی جدید، جزئیات کامل (همه عکس‌ها + مشخصات) رو می‌گیره
-  ۴. کپشن با قالب کانالت می‌سازه و پست می‌کنه (آلبوم عکس + دکمه پشتیبانی)
-
-حالت تست (بدون پست کردن چیزی، فقط نمایش خروجی):
-    python3 main.py --test
-تست یک آگهی خاص با توکن:
-    python3 main.py --test-token gaqZf69e
+  ۳. جزئیات هر آگهی رو می‌گیره و فقط موتورهایی با کارکرد ۲۰۰+ کیلومتر رو نگه می‌داره
+  ۴. کپشن با قالب کانال می‌سازه و پست می‌کنه (آلبوم عکس + دکمه‌ها)
 """
 
 import os
+import re
 import sys
 import time
 
@@ -23,6 +19,26 @@ from storage import load_seen, save_seen, mark_seen
 from telegram_poster import TelegramPoster
 
 load_dotenv()
+
+# حداقل کارکرد (کیلومتر) — آگهی‌هایی با کارکرد کمتر از این (یا نامشخص) پست نمیشن
+MIN_MILEAGE_KM = 200
+
+FA_TO_EN = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+
+
+def get_mileage_km(detail: dict) -> int | None:
+    """کارکرد آگهی رو به عدد (کیلومتر) برمی‌گردونه؛ اگه پیدا نشد None."""
+    raw = ""
+    for key, value in detail.get("specs", {}).items():
+        if "کارکرد" in key:
+            raw = value
+            break
+    if not raw:
+        return None
+    digits = re.sub(r"[^0-9]", "", raw.translate(FA_TO_EN))
+    if not digits:
+        return None
+    return int(digits)
 
 
 def get_config(need_telegram: bool = True):
@@ -51,6 +67,8 @@ def run_test_token(token: str):
     detail = fetch_post_detail(token)
     print("=" * 50)
     print("عنوان:", detail["title"])
+    print("مکان:", detail["city"], "-", detail["district"])
+    print("کارکرد (کیلومتر):", get_mileage_km(detail))
     print("تعداد عکس:", len(detail["images"]))
     for img in detail["images"]:
         print("  🖼", img)
@@ -63,13 +81,13 @@ def run_test_token(token: str):
 def run_test():
     """چند آگهی اول رو می‌گیره و کپشن‌ها رو نشون میده — بدون پست کردن."""
     config = get_config(need_telegram=False)
-    listings = fetch_new_listings(config["city_code"], config["category"], max_pages=1)
+    listings = fetch_new_listings(config["city_code"], config["category"])
     print(f"{len(listings)} آگهی دریافت شد. نمایش ۳ تای اول:\n")
     for listing in listings[:3]:
         detail = fetch_post_detail(listing["token"])
         print("=" * 50)
         print(f"لینک: {listing['web_url']}")
-        print(f"تعداد عکس: {len(detail['images'])}")
+        print(f"کارکرد: {get_mileage_km(detail)} کیلومتر | عکس: {len(detail['images'])}")
         print("-" * 50)
         print(build_caption(detail, listing))
         print()
@@ -85,8 +103,7 @@ def main():
     new_listings = [p for p in listings if p["token"] not in seen]
     print(f"[divar] {len(listings)} آگهی دریافت شد، {len(new_listings)} تاش جدیده.")
 
-    to_post = new_listings[: config["max_posts"]]
-    if not to_post:
+    if not new_listings:
         print("[main] آگهی جدیدی برای پست نیست.")
         return
 
@@ -97,13 +114,24 @@ def main():
     )
 
     posted = 0
-    for i, listing in enumerate(to_post):
+    for listing in new_listings:
+        if posted >= config["max_posts"]:
+            break
         try:
             detail = fetch_post_detail(listing["token"])
+
+            # --- فیلتر کارکرد: فقط ۲۰۰ کیلومتر به بالا ---
+            mileage = get_mileage_km(detail)
+            if mileage is None or mileage < MIN_MILEAGE_KM:
+                print(f"[main] ⏭ رد شد (کارکرد={mileage}): {listing['title']}")
+                mark_seen(seen, listing["token"])
+                save_seen(seen)
+                continue
+
             caption = build_caption(detail, listing)
             images = detail["images"] or ([listing["thumb"]] if listing["thumb"] else [])
-            ok = poster.send_post(caption, images, listing["web_url"])
-        except Exception as e:  # noqa: BLE001 — یک آگهی خراب نباید کل اجرا رو متوقف کنه
+            ok = poster.send_post(caption, images)
+        except Exception as e:
             print(f"[main] خطا روی آگهی {listing['token']}: {e}")
             ok = False
 
@@ -112,13 +140,11 @@ def main():
         if ok:
             posted += 1
             print(f"[main] ✅ پست شد: {listing['title']}")
+            time.sleep(config["delay"])
         else:
             print(f"[main] ❌ پست نشد: {listing['title']}")
 
-        if i < len(to_post) - 1:
-            time.sleep(config["delay"])
-
-    print(f"[main] پایان — {posted} از {len(to_post)} آگهی پست شد.")
+    print(f"[main] پایان — {posted} آگهی پست شد.")
 
 
 if __name__ == "__main__":
