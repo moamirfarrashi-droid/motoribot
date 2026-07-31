@@ -1,20 +1,22 @@
 """
 ارسال پست به کانال تلگرام.
 
-دو حالت پست (POST_MODE در .env):
-  single : یک عکس + کپشن + دکمه‌ها روی همون پست (تمیزترین حالت)
-  album  : همه عکس‌های آگهی به صورت آلبوم + کپشن روی عکس اول،
-           و چون تلگرام اجازه نمیده روی آلبوم دکمه بذاریم، یک پیام کوتاه
-           بلافاصله بعد از آلبوم (به صورت ریپلای روی آلبوم) با دکمه‌ها میاد.
+دکمه‌های زیر هر پست:
+  💬 ارتباط با پشتیبانی   → آیدی تلگرام پشتیبانی
+  🛠 درخواست کارشناسی      → همون آیدی تلگرام
+  🛡 راهنمای خرید امن      → پست راهنما در کانال
 
-اگه از داخل ایران اجراش می‌کنی، api.telegram.org مسدوده — متغیر TELEGRAM_PROXY
-رو در .env تنظیم کن (مثلاً socks5h://127.0.0.1:1080).
+نکته: تلگرام اجازه نمیده روی آلبوم (چند عکس) دکمه گذاشت؛ به همین خاطر در حالت
+آلبوم، دکمه‌ها در یک پیام کوتاه مستقل (بدون ریپلای) بلافاصله بعد از آلبوم میان.
+در حالت single (تک‌عکس) دکمه‌ها مستقیم روی خود پست هستن.
 """
 
 import requests
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 MAX_ALBUM_SIZE = 10  # محدودیت تلگرام
+
+SAFE_BUYING_GUIDE_URL = "https://t.me/motoritoo/7"
 
 
 class TelegramPoster:
@@ -42,24 +44,25 @@ class TelegramPoster:
             return None
         return data.get("result")
 
-    def _keyboard(self, post_web_url: str) -> dict:
+    def _keyboard(self) -> dict:
         return {
             "inline_keyboard": [
                 [{"text": "💬 ارتباط با پشتیبانی", "url": self.support_url}],
-                [{"text": "🔗 مشاهده آگهی در دیوار", "url": post_web_url}],
+                [{"text": "🛠 درخواست کارشناسی", "url": self.support_url}],
+                [{"text": "🛡 راهنمای خرید امن", "url": SAFE_BUYING_GUIDE_URL}],
             ]
         }
 
     # -------------------------------------------------------------- ارسال
 
-    def send_post(self, caption: str, images: list[str], post_web_url: str) -> bool:
+    def send_post(self, caption: str, images: list[str], post_web_url: str = "") -> bool:
         images = [i for i in images if i][: self.max_images]
 
         if not images:
             return self._call("sendMessage", {
                 "chat_id": self.channel_id,
                 "text": caption,
-                "reply_markup": self._keyboard(post_web_url),
+                "reply_markup": self._keyboard(),
             }) is not None
 
         if self.post_mode == "single" or len(images) == 1:
@@ -67,7 +70,7 @@ class TelegramPoster:
                 "chat_id": self.channel_id,
                 "photo": images[0],
                 "caption": caption,
-                "reply_markup": self._keyboard(post_web_url),
+                "reply_markup": self._keyboard(),
             }) is not None
 
         # --- حالت آلبوم ---
@@ -78,22 +81,17 @@ class TelegramPoster:
             "media": media,
         })
         if result is None:
-            # اگه آلبوم شکست خورد (مثلاً یکی از عکس‌ها خراب بود)، با یک عکس دوباره امتحان کن
             return self._call("sendPhoto", {
                 "chat_id": self.channel_id,
                 "photo": images[0],
                 "caption": caption,
-                "reply_markup": self._keyboard(post_web_url),
+                "reply_markup": self._keyboard(),
             }) is not None
 
-        # پیام دکمه‌ها، ریپلای روی اولین عکس آلبوم
-        first_msg_id = result[0]["message_id"] if isinstance(result, list) and result else None
-        payload = {
+        # پیام دکمه‌ها — مستقل، بدون ریپلای
+        self._call("sendMessage", {
             "chat_id": self.channel_id,
-            "text": "برای خرید یا سوال 👇",
-            "reply_markup": self._keyboard(post_web_url),
-        }
-        if first_msg_id:
-            payload["reply_to_message_id"] = first_msg_id
-        self._call("sendMessage", payload)
+            "text": "👇 برای خرید، کارشناسی یا سوال:",
+            "reply_markup": self._keyboard(),
+        })
         return True
