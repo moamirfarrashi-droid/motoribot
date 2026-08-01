@@ -3,11 +3,13 @@ name: Divar to Telegram - Daily
 on:
   schedule:
     # ساعت‌ها به وقت UTC هستن (ایران = UTC+3:30)
-    - cron: "30 6 * * *"    # ۱۰:۰۰ صبح ایران
-    - cron: "30 7 * * *"    # ۱۱:۰۰ ایران
-    - cron: "30 10 * * *"   # ۱۴:۰۰ ایران
-    - cron: "30 13 * * *"   # ۱۷:۰۰ ایران
-    - cron: "30 15 * * *"   # ۱۹:۰۰ ایران
+    # دقیقه‌ها عمداً غیر-رند (۱۲) گذاشته شدن تا با شلوغی دقیقه‌های رند
+    # (مثل ۰۰ یا ۳۰) روی گیت‌هاب تداخل نکنن و اجرا از قلم نیفته.
+    - cron: "12 6 * * *"    # ۰۹:۴۲ صبح ایران
+    - cron: "12 7 * * *"    # ۱۰:۴۲ ایران
+    - cron: "12 10 * * *"   # ۱۳:۴۲ ایران
+    - cron: "12 13 * * *"   # ۱۶:۴۲ ایران
+    - cron: "12 15 * * *"   # ۱۸:۴۲ ایران
   workflow_dispatch: {}   # اجرای دستی از تب Actions
 
 permissions:
@@ -18,14 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install dependencies
         run: pip install -r requirements.txt
-
       - name: Run bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -38,7 +37,6 @@ jobs:
           MAX_POSTS_PER_RUN: "6"
           DELAY_BETWEEN_POSTS_SECONDS: "45"
         run: python main.py
-
       - name: Save seen posts (prevent duplicates on next run)
         run: |
           git pull --rebase || true
