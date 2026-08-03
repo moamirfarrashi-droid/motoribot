@@ -33,8 +33,8 @@ jobs:
           DIVAR_CITY_CODE: "1"
           DIVAR_CATEGORY: "motorcycles"
           POST_MODE: "album"
-          MAX_IMAGES_PER_POST: "6"
-          MAX_POSTS_PER_RUN: "6"
+          MAX_IMAGES_PER_POST: "4"
+          MAX_POSTS_PER_RUN: "4"
           DELAY_BETWEEN_POSTS_SECONDS: "45"
         run: python main.py
       - name: Save seen posts (prevent duplicates on next run)
