@@ -1,0 +1,38 @@
+name: Divar Price Report (every other day)
+
+on:
+  schedule:
+    - cron: "35 15 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Send report (if due)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          SUPPORT_TELEGRAM_URL: ${{ secrets.SUPPORT_TELEGRAM_URL }}
+        run: python weekly_report.py
+
+      - name: Save report state
+        run: |
+          git pull --rebase || true
+          git config user.name "bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add report_state.json || true
+          git diff --cached --quiet || git commit -m "update report state [skip ci]"
+          git push
