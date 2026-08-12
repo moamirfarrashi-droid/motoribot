@@ -32,7 +32,7 @@ jobs:
           SUPPORT_TELEGRAM_URL: ${{ secrets.SUPPORT_TELEGRAM_URL }}
           DIVAR_CITY_CODE: "1"
           DIVAR_CATEGORY: "motorcycles"
-          POST_MODE: "album"
+          POST_MODE: "single"
           MAX_IMAGES_PER_POST: "4"
           MAX_POSTS_PER_RUN: "4"
           DELAY_BETWEEN_POSTS_SECONDS: "45"
