@@ -2,8 +2,8 @@
 اسکریپت اصلی. هر بار اجرا:
   ۱. لیست آگهی‌های تازه موتورسیکلت رو از دیوار می‌گیره
   ۲. تکراری‌ها رو (با seen_posts.json) فیلتر می‌کنه
-  ۳. جزئیات هر آگهی رو می‌گیره و فقط موتورهای مطابق فیلترها رو نگه می‌داره
-  ۴. کپشن با قالب کانال می‌سازه و پست می‌کنه (آلبوم عکس + دکمه‌ها)
+  ۳. جزئیات هر آگهی رو می‌گیره، آمار قیمت/برند رو ثبت می‌کنه، و فیلتر می‌کنه
+  ۴. کپشن با قالب کانال می‌سازه و پست می‌کنه
 """
 
 import os
@@ -15,16 +15,14 @@ from dotenv import load_dotenv
 
 from divar_client import fetch_new_listings, fetch_post_detail
 from formatter import build_caption
+from price_tracker import record_stat
 from storage import load_seen, save_seen, mark_seen
 from telegram_poster import TelegramPoster
 
 load_dotenv()
 
-# ---- فیلترهای آگهی ----
-# فقط موتورهایی با کارکرد بین این دو عدد (کیلومتر) پست میشن
 MIN_MILEAGE_KM = 1000
 MAX_MILEAGE_KM = 15000
-# فقط موتورهایی با قیمت حداقل این مقدار (تومان) پست میشن
 MIN_PRICE_TOMAN = 400_000_000
 
 FA_TO_EN = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
@@ -36,7 +34,6 @@ def _digits_of(text: str) -> int | None:
 
 
 def get_mileage_km(detail: dict) -> int | None:
-    """کارکرد آگهی رو به عدد (کیلومتر) برمی‌گردونه؛ اگه پیدا نشد None."""
     for key, value in detail.get("specs", {}).items():
         if "کارکرد" in key:
             return _digits_of(value)
@@ -44,7 +41,6 @@ def get_mileage_km(detail: dict) -> int | None:
 
 
 def get_price_toman(detail: dict) -> int | None:
-    """قیمت آگهی رو به عدد (تومان) برمی‌گردونه؛ اگه پیدا نشد یا توافقی بود None."""
     raw = detail.get("price_text", "")
     if not raw:
         for key, value in detail.get("specs", {}).items():
@@ -78,7 +74,6 @@ def get_config(need_telegram: bool = True):
 
 
 def run_test_token(token: str):
-    """جزئیات و کپشن یک آگهی خاص رو نشون میده — بدون پست کردن."""
     detail = fetch_post_detail(token)
     print("=" * 50)
     print("عنوان:", detail["title"])
@@ -95,7 +90,6 @@ def run_test_token(token: str):
 
 
 def run_test():
-    """چند آگهی اول رو می‌گیره و کپشن‌ها رو نشون میده — بدون پست کردن."""
     config = get_config(need_telegram=False)
     listings = fetch_new_listings(config["city_code"], config["category"])
     print(f"{len(listings)} آگهی دریافت شد. نمایش ۳ تای اول:\n")
@@ -136,16 +130,18 @@ def main():
         try:
             detail = fetch_post_detail(listing["token"])
 
-            # --- فیلتر کارکرد: بین ۱۰۰۰ تا ۱۵۰۰۰ کیلومتر ---
-            mileage = get_mileage_km(detail)
+            mileage_for_stats = get_mileage_km(detail)
+            price_for_stats = get_price_toman(detail)
+            record_stat(detail.get("title") or listing["title"], price_for_stats, mileage_for_stats)
+
+            mileage = mileage_for_stats
             if mileage is None or not (MIN_MILEAGE_KM <= mileage <= MAX_MILEAGE_KM):
                 print(f"[main] ⏭ رد شد (کارکرد={mileage}): {listing['title']}")
                 mark_seen(seen, listing["token"])
                 save_seen(seen)
                 continue
 
-            # --- فیلتر قیمت: حداقل ۴۰۰ میلیون تومان (توافقی/نامشخص هم رد میشه) ---
-            price = get_price_toman(detail)
+            price = price_for_stats
             if price is None or price < MIN_PRICE_TOMAN:
                 print(f"[main] ⏭ رد شد (قیمت={price}): {listing['title']}")
                 mark_seen(seen, listing["token"])
@@ -172,6 +168,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main() if "--test" not in sys.argv and "--test-token" not in sys.argv else (
-        run_test() if "--test" in sys.argv else run_test_token(sys.argv[sys.argv.index("--test-token") + 1])
-    )
+    if "--test" in sys.argv:
+        run_test()
+    elif "--test-token" in sys.argv:
+        idx = sys.argv.index("--test-token")
+        run_test_token(sys.argv[idx + 1])
+    else:
+        main()
