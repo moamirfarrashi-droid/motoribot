@@ -1,0 +1,25 @@
+name: Undo Mistaken AI Upload
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  undo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Undo the two mistaken commits
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git revert --no-edit fd1f0f2876f3b78c62429117157af9c85386d13b d02eb44316fe32c2ab250ed8a24b14ab72e0d47f
+          git push origin HEAD:main
